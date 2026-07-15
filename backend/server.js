@@ -119,7 +119,10 @@ app.use('/api/superadmin', superAdminRoutes);
 // Serve uploaded files
 const path = require('path');
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
+app.use((req, res, next) => {
+  console.log("REQUEST:", req.method, req.originalUrl);
+  next();
+});
 // Health check
 app.get('/api/health', (req, res) => {
   res.status(200).json({
