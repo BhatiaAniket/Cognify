@@ -1,0 +1,6 @@
+AWS session 4
+Range for continue file 
+eg 
+ touch snap_{1..6}_data.jpg
+this will create a file---start from snap_1 -- to snap_6
+snap_1_data.jpg  snap_2_data.jpg  snap_3_data.jpg  snap_4_data.jpg  snap_5_data.jpg  snap_6_data.jpg  
