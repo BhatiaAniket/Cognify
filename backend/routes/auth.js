@@ -71,6 +71,30 @@ router.post(
   authController.resendVerification
 );
 
+// ━━━ FORGOT PASSWORD ━━━
+router.post(
+  '/forgot-password',
+  [
+    body('email')
+      .trim()
+      .isEmail()
+      .withMessage('Please provide a valid email address')
+      .normalizeEmail(),
+  ],
+  authController.forgotPassword
+);
+
+// ━━━ RESET PASSWORD ━━━
+router.post(
+  '/reset-password/:token',
+  [
+    body('newPassword')
+      .isLength({ min: 6 })
+      .withMessage('Password must be at least 6 characters long'),
+  ],
+  authController.resetPassword
+);
+
 // ━━━ LOGOUT ━━━
 router.post('/logout', authController.logout);
 

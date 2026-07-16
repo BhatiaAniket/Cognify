@@ -4,7 +4,7 @@ const { validationResult } = require('express-validator');
 const User = require('../models/User');
 const Company = require('../models/Company');
 const sendEmail = require('../utils/sendEmail');
-const { getVerificationEmailTemplate } = require('../utils/emailTemplates');
+const { getVerificationEmailTemplate, getPasswordResetEmailTemplate } = require('../utils/emailTemplates');
 
 // Generate access token
 const generateAccessToken = (user) => {
@@ -32,6 +32,7 @@ console.log(
 console.log("NODE_ENV:", process.env.NODE_ENV);
 // ━━━ REGISTER (Company Admin only) ━━━
 exports.register = async (req, res) => {
+  let createdCompany = null; // Track for rollback
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -63,7 +64,7 @@ exports.register = async (req, res) => {
     }
 
     // Create Company (inactive until email verified)
-    const company = await Company.create({
+    createdCompany = await Company.create({
       name: companyName,
       location: companyLocation,
       employeeCount: employeeCount || '1-10',
@@ -78,17 +79,20 @@ exports.register = async (req, res) => {
       .update(rawToken)
       .digest('hex');
 
-    // Create User
+    // Create User — if this fails, the catch block will roll back the Company
     const user = await User.create({
       fullName,
       email: email.toLowerCase(),
       password,
       role: 'company_admin',
-      company: company._id,
+      company: createdCompany._id,
       isEmailVerified: false,
       emailVerificationToken: hashedToken,
       emailVerificationExpires: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
     });
+
+    // User created successfully — clear rollback tracker
+    createdCompany = null;
 
     // Send verification email
     const verificationUrl = `${process.env.FRONTEND_URL}/verify-email?token=${rawToken}`;
@@ -111,7 +115,47 @@ exports.register = async (req, res) => {
       data: { email: user.email },
     });
   } catch (error) {
-    console.error('Register error:', error);
+    // Rollback: delete orphaned Company if User creation failed
+    if (createdCompany) {
+      try {
+        await Company.findByIdAndDelete(createdCompany._id);
+        console.error('Rolled back orphaned company', createdCompany._id, 'after User.create() failure');
+      } catch (rollbackError) {
+        console.error('Failed to rollback company', createdCompany._id, ':', rollbackError.message);
+      }
+    }
+
+    // Detailed error logging for diagnostics
+    console.error('Register error:', {
+      name: error.name,
+      code: error.code,
+      message: error.message,
+      errors: error.errors,
+      keyPattern: error.keyPattern,
+    });
+
+    // Explicit duplicate-key error handling (MongoDB error code 11000)
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'An account with this email already exists.',
+        errors: [{ field: 'email', message: 'Email already in use' }],
+      });
+    }
+
+    // Mongoose validation error
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map((e) => ({
+        field: e.path,
+        message: e.message,
+      }));
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed.',
+        errors: validationErrors,
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: 'Server error. Please try again later.',
@@ -489,6 +533,144 @@ exports.changePassword = async (req, res) => {
     });
   } catch (error) {
     console.error('Change password error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error. Please try again later.',
+      errors: [],
+    });
+  }
+};
+
+// ━━━ FORGOT PASSWORD ━━━
+exports.forgotPassword = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array().map((e) => ({ field: e.path, message: e.msg })),
+      });
+    }
+
+    const { email } = req.body;
+
+    // Always return the same response to avoid leaking which emails are registered
+    const genericResponse = {
+      success: true,
+      message: 'If an account exists with this email, a password reset link has been sent.',
+      data: {},
+    };
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.status(200).json(genericResponse);
+    }
+
+    // Generate reset token
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(rawToken)
+      .digest('hex');
+
+    // Store hashed token and expiry (1 hour) on user
+    user.passwordResetToken = hashedToken;
+    user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    await user.save({ validateBeforeSave: false });
+
+    // Send reset email
+    const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${rawToken}`;
+    const emailHtml = getPasswordResetEmailTemplate(user.fullName, resetUrl);
+
+    try {
+      await sendEmail({
+        to: user.email,
+        subject: 'Reset your CognifyPM password',
+        html: emailHtml,
+      });
+    } catch (emailError) {
+      console.error('Password reset email failed:', emailError.message);
+      // Clear the token if email fails so user can retry immediately
+      user.passwordResetToken = undefined;
+      user.passwordResetExpires = undefined;
+      await user.save({ validateBeforeSave: false });
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send reset email. Please try again later.',
+        errors: [],
+      });
+    }
+
+    return res.status(200).json(genericResponse);
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error. Please try again later.',
+      errors: [],
+    });
+  }
+};
+
+// ━━━ RESET PASSWORD ━━━
+exports.resetPassword = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array().map((e) => ({ field: e.path, message: e.msg })),
+      });
+    }
+
+    const { token } = req.params;
+    const { newPassword } = req.body;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reset token is required.',
+        errors: [],
+      });
+    }
+
+    // Hash the incoming token to compare with stored hash
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(token)
+      .digest('hex');
+
+    const user = await User.findOne({
+      passwordResetToken: hashedToken,
+      passwordResetExpires: { $gt: Date.now() },
+    }).select('+passwordResetToken +passwordResetExpires +refreshToken');
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired reset link. Please request a new one.',
+        errors: [],
+      });
+    }
+
+    // Update password (triggers pre-save bcrypt hook)
+    user.password = newPassword;
+    // Clear reset token fields
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    // Invalidate refresh token to force re-login
+    user.refreshToken = undefined;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password reset successful. Please log in with your new password.',
+      data: {},
+    });
+  } catch (error) {
+    console.error('Reset password error:', error);
     return res.status(500).json({
       success: false,
       message: 'Server error. Please try again later.',
