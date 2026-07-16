@@ -6,7 +6,6 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
-const { v4: uuidv4 } = require('uuid');
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -21,7 +20,7 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     // Generate unique filename
-    const uniqueSuffix = uuidv4();
+    const uniqueSuffix = crypto.randomUUID();
     const ext = path.extname(file.originalname);
     cb(null, `${uniqueSuffix}${ext}`);
   },

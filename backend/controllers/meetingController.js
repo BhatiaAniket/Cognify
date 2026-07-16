@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const Meeting = require('../models/Meeting');
 const User = require('../models/User');
 const Company = require('../models/Company');
@@ -44,7 +44,7 @@ exports.createMeeting = async (req, res) => {
       companyId,
       createdBy: userId,
       participants: participantIds,
-      roomId: bodyRoomId || uuidv4(), // Instructions: Generate roomId using uuid if missing
+      roomId: bodyRoomId || crypto.randomUUID(), // Instructions: Generate roomId using uuid if missing
       status: 'scheduled',
     });
 
