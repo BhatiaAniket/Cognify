@@ -23,7 +23,13 @@ const generateRefreshToken = (user) => {
     { expiresIn: process.env.REFRESH_TOKEN_EXPIRES || '7d' }
   );
 };
-
+console.log("JWT_EXPIRES_IN:", process.env.JWT_EXPIRES_IN);
+console.log("REFRESH_TOKEN_EXPIRES:", process.env.REFRESH_TOKEN_EXPIRES);
+console.log(
+  "REFRESH_TOKEN_SECRET:",
+  process.env.REFRESH_TOKEN_SECRET ? "Loaded" : "MISSING",
+);
+console.log("NODE_ENV:", process.env.NODE_ENV);
 // ━━━ REGISTER (Company Admin only) ━━━
 exports.register = async (req, res) => {
   try {
